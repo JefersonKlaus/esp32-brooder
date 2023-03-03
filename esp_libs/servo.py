@@ -40,3 +40,12 @@ class Servo:
             )
         )
         self.pwm.duty(duty)
+
+    def get_degree(self):
+        _duty = self.pwm.duty()
+        degree = int(
+            scale_value(
+                value=_duty, in_min=26, in_max=128, out_min=0, out_max=self.max_degree
+            )
+        )
+        return degree

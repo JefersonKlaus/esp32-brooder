@@ -42,58 +42,119 @@ def time_diff(first_date, second_date):
     return diff_day, diff_hour, diff_min
 
 
-def get_air_flow_correction(list_last_temperatures, current_correction):
-    """
-    Args:
-        list_last_temperatures (list):
-        current_correction (int):
-    Returns:
-        int: return the new air flow correction
-    """
-    _CORRETION_VALUE = 5
-    if (sum(list_last_temperatures) / len(list_last_temperatures)) > 38:
-        if current_correction <= 30:
-            return current_correction + _CORRETION_VALUE
-        else:
-            return current_correction
-    elif (sum(list_last_temperatures) / len(list_last_temperatures)) < 37:
-        if current_correction >= -20:
-            return current_correction - _CORRETION_VALUE
-        else: 
-            return current_correction
-    else:
-        return current_correction
-
-
-def config_air_outlet_opening(servo, temperature, correction=0):
+def run_config_air_flow(servo, thermistor, error=0.2):
     """
     Change the position of the servo motor to control the temperature
     Args:
         servo (Servo):
-        temperature (float):
-        correction (int):
+        thermistor (Thermistor):
+        error (float):
     Returns:
         None
     """
-    if temperature < 37.7:
-        servo.set_degree(degree=(correction if correction >= 0 else 0))
-    elif temperature >= 37.7 and temperature < 37.9:
-        _degree = 15 + correction
-        _degree = max(0, _degree)
-        servo.set_degree(degree=_degree if _degree <= 90 else 90)
-    elif temperature >= 37.9 and temperature < 38.1:
-        _degree = 30 + correction
-        _degree = max(0, _degree)
-        servo.set_degree(degree=_degree if _degree <= 90 else 90)
-    elif temperature >= 38.1 and temperature < 39:
-        _degree = 45 + correction
-        _degree = max(0, _degree)
-        servo.set_degree(degree=_degree if _degree <= 90 else 90)
-    elif temperature >= 39:
-        servo.set_degree(degree=90 + (correction if correction <= 0 else 0))
+    list_last_temperatures = list()
+    last_average_temp = 0
+    TEMP_MIN = 37.5
+    TEMP_MAX = 38
+    count_to_small_corrections = 0
+    LOOP_FOR_SMALL_CORRECTIONS = 30
+
+    while True:
+        lock.acquire()
+
+        try:
+            temperature = thermistor.get_temperature()
+            list_last_temperatures.append(temperature)
+
+            # keep only the last 3 temps
+            if len(list_last_temperatures) > 4:
+                list_last_temperatures.pop(0)
+
+        except:
+            temperature = -1
+
+        _current_average_temp = sum(list_last_temperatures) / len(
+            list_last_temperatures
+        )
+        _current_degree = servo.get_degree()
+
+        if _current_average_temp < TEMP_MIN:
+            if (last_average_temp - _current_average_temp) > error:
+                last_average_temp = _current_average_temp
+                _current_degree = _current_degree - 5
+                servo.set_degree(degree=_current_degree if _current_degree >= 0 else 0)
+            else:
+                if count_to_small_corrections >= LOOP_FOR_SMALL_CORRECTIONS:
+                    _current_degree = _current_degree - 5
+                    servo.set_degree(
+                        degree=_current_degree if _current_degree >= 0 else 0
+                    )
+                    count_to_small_corrections = 0
+                else:
+                    count_to_small_corrections = count_to_small_corrections + 1
+
+        elif _current_average_temp > TEMP_MAX:
+            if (_current_average_temp - last_average_temp) > error:
+                last_average_temp = _current_average_temp
+                _current_degree = _current_degree + 5
+                print("c")
+                servo.set_degree(
+                    degree=_current_degree if _current_degree <= 90 else 90
+                )
+            else:
+                if count_to_small_corrections >= LOOP_FOR_SMALL_CORRECTIONS:
+                    _current_degree = _current_degree + 5
+                    servo.set_degree(
+                        degree=_current_degree if _current_degree >= 0 else 0
+                    )
+                    count_to_small_corrections = 0
+                else:
+                    count_to_small_corrections = count_to_small_corrections + 1
+
+        else:
+            count_to_small_corrections = 0
+            last_average_temp = _current_average_temp
+
+        lock.release()
+        time.sleep(0.1)
 
 
-def show_basic_lcd_information(
+def run_show_basic_lcd_informations(hygrothermograph, thermistor):
+    DATE_CONTROL = {"INIT_AIR_FLOW": 0, "STOP_SPINNING": 21, "FINAL_DATE": 24}
+    started_date = utime.localtime()
+
+    while True:
+        lock.acquire()
+
+        current_date = utime.localtime()
+        count_day, count_hour, count_minute = time_diff(started_date, current_date)
+
+        try:
+            humidity = hygrothermograph.get_humidity()
+        except:
+            humidity = -1
+
+        try:
+            temperature = thermistor.get_temperature()
+        except:
+            temperature = -1
+
+        # DISPLAY
+        print_basic_lcd_information(
+            lcd=lcd,
+            temperature=temperature,
+            humidity=humidity,
+            count_day=count_day,
+            count_hour=count_hour,
+            count_minute=count_minute,
+            day_to_finish=DATE_CONTROL.get("FINAL_DATE") - count_day,
+        )
+
+        lock.release()
+        time.sleep(1)
+
+
+def print_basic_lcd_information(
     lcd, temperature, humidity, count_day, count_hour, count_minute, day_to_finish
 ):
     lcd.move_to(0, 0)
@@ -123,86 +184,15 @@ lcd.backlight_on()
 
 
 def main():
-    # _thread.start_new_thread(get_temperature, (hygrothermograph,))
-    # _thread.start_new_thread(get_humidity, (hygrothermograph,))
-    DATE_CONTROL = {"INIT_AIR_FLOW": 0, "STOP_SPINNING": 21, "FINAL_DATE": 24}
-    started_date = utime.localtime()
-    control_eggs_moved = False
-
-    list_last_temperatures = list()
-    control_air_flow = False
-    air_flow_correction = 0
-    last_minute_checked_air_flow_correction = 0
+    _thread.start_new_thread(run_config_air_flow, (servo, thermistor))
+    _thread.start_new_thread(
+        run_show_basic_lcd_informations, (hygrothermograph, thermistor)
+    )
 
     while True:
-        # calculate how long it's been working
-        current_date = utime.localtime()
-        count_day, count_hour, count_minute = time_diff(started_date, current_date)
-
-        # get data from sensors
-        try:
-            humidity = hygrothermograph.get_humidity()
-        except:
-            humidity = -1
-
-        try:
-            temperature = thermistor.get_temperature()
-            list_last_temperatures.append(temperature)
-
-            # keep only the last 30 temps
-            if len(list_last_temperatures) > 30:
-                list_last_temperatures.pop(0)
-
-        except:
-            temperature = -1
-
-        if control_air_flow:
-            # get the correction to air flow
-            if last_minute_checked_air_flow_correction != count_minute:
-                air_flow_correction = get_air_flow_correction(
-                    list_last_temperatures=list_last_temperatures,
-                    current_correction=air_flow_correction,
-                )
-                last_minute_checked_air_flow_correction = count_minute
-        else:
-            if temperature > 37:
-                control_air_flow = True
-
-        # AIR FLOW
-        if count_day >= DATE_CONTROL.get("INIT_AIR_FLOW"):
-            config_air_outlet_opening(
-                servo=servo, temperature=temperature, correction=air_flow_correction
-            )
-
-        # TODO: implement when the engine for moving the eggs is ready
-        # # EGGS MOVIMENT CONTROL
-        # if (count_minute == 0 or count_minute == 30) and count_day <= DATE_CONTROL.get(
-        #     "STOP_SPINNING"
-        # ):
-        #     if control_eggs_moved == False:
-        #         step_motor.move_degree(
-        #             direction=StepMotorDirectionOptions.CLOCKWISE, degree=180
-        #         )
-        #         step_motor.stop()
-        #         control_eggs_moved = True
-        # else:
-        #     # set to False for next hour to be moved
-        #     control_eggs_moved = False
-
-        # DISPLAY
-        show_basic_lcd_information(
-            lcd=lcd,
-            temperature=temperature,
-            humidity=humidity,
-            count_day=count_day,
-            count_hour=count_hour,
-            count_minute=count_minute,
-            day_to_finish=DATE_CONTROL.get("FINAL_DATE") - count_day,
-        )
-
-        time.sleep(1)
+        pass
 
 
-# lock = _thread.allocate_lock()
+lock = _thread.allocate_lock()
 if __name__ == "__main__":
     main()
