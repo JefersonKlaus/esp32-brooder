@@ -52,9 +52,15 @@ def get_air_flow_correction(list_last_temperatures, current_correction):
     """
     _CORRETION_VALUE = 5
     if (sum(list_last_temperatures) / len(list_last_temperatures)) > 38:
-        return current_correction + _CORRETION_VALUE
+        if current_correction <= 30:
+            return current_correction + _CORRETION_VALUE
+        else:
+            return current_correction
     elif (sum(list_last_temperatures) / len(list_last_temperatures)) < 37:
-        return current_correction - _CORRETION_VALUE
+        if current_correction >= -20:
+            return current_correction - _CORRETION_VALUE
+        else: 
+            return current_correction
     else:
         return current_correction
 
