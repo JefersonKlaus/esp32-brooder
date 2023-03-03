@@ -124,6 +124,7 @@ def main():
     control_eggs_moved = False
 
     list_last_temperatures = list()
+    control_air_flow = False
     air_flow_correction = 0
     last_minute_checked_air_flow_correction = 0
 
@@ -149,13 +150,17 @@ def main():
         except:
             temperature = -1
 
-        # get the correction to air flow
-        if last_minute_checked_air_flow_correction != count_minute:
-            air_flow_correction = get_air_flow_correction(
-                list_last_temperatures=list_last_temperatures,
-                current_correction=air_flow_correction,
-            )
-            last_minute_checked_air_flow_correction = count_minute
+        if control_air_flow:
+            # get the correction to air flow
+            if last_minute_checked_air_flow_correction != count_minute:
+                air_flow_correction = get_air_flow_correction(
+                    list_last_temperatures=list_last_temperatures,
+                    current_correction=air_flow_correction,
+                )
+                last_minute_checked_air_flow_correction = count_minute
+        else:
+            if temperature > 37:
+                control_air_flow = True
 
         # AIR FLOW
         if count_day >= DATE_CONTROL.get("INIT_AIR_FLOW"):
