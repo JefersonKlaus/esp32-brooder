@@ -1,5 +1,6 @@
 import _thread
 import time
+from machine import Pin
 
 import utime
 
@@ -42,22 +43,19 @@ def time_diff(first_date, second_date):
     return diff_day, diff_hour, diff_min
 
 
-def run_config_air_flow(servo, thermistor, error=0.2):
+def run_config_temperature(relay, thermistor):
     """
-    Change the position of the servo motor to control the temperature
+    Turns the lights on or off to control the temperature
+    Works seccond by seccond
     Args:
-        servo (Servo):
+        relay (Pin):
         thermistor (Thermistor):
-        error (float):
     Returns:
         None
     """
     list_last_temperatures = list()
-    last_average_temp = 0
-    TEMP_MIN = 37.5
+    TEMP_MIN = 37
     TEMP_MAX = 38
-    count_to_small_corrections = 0
-    LOOP_FOR_SMALL_CORRECTIONS = 30
 
     while True:
         lock.acquire()
@@ -67,60 +65,65 @@ def run_config_air_flow(servo, thermistor, error=0.2):
             list_last_temperatures.append(temperature)
 
             # keep only the last 3 temps
-            if len(list_last_temperatures) > 4:
+            if len(list_last_temperatures) > 10:
                 list_last_temperatures.pop(0)
 
         except:
-            temperature = -1
+            pass
 
         _current_average_temp = sum(list_last_temperatures) / len(
             list_last_temperatures
         )
-        _current_degree = servo.get_degree()
 
         if _current_average_temp < TEMP_MIN:
-            if (last_average_temp - _current_average_temp) > error:
-                last_average_temp = _current_average_temp
-                _current_degree = _current_degree - 5
-                servo.set_degree(degree=_current_degree if _current_degree >= 0 else 0)
-            else:
-                if count_to_small_corrections >= LOOP_FOR_SMALL_CORRECTIONS:
-                    _current_degree = _current_degree - 5
-                    servo.set_degree(
-                        degree=_current_degree if _current_degree >= 0 else 0
-                    )
-                    count_to_small_corrections = 0
-                else:
-                    count_to_small_corrections = count_to_small_corrections + 1
+            # Turn off relay to use state NC turning on the lights
+            relay.value(0)
 
         elif _current_average_temp > TEMP_MAX:
-            if (_current_average_temp - last_average_temp) > error:
-                last_average_temp = _current_average_temp
-                _current_degree = _current_degree + 5
-                print("c")
-                servo.set_degree(
-                    degree=_current_degree if _current_degree <= 90 else 90
-                )
-            else:
-                if count_to_small_corrections >= LOOP_FOR_SMALL_CORRECTIONS:
-                    _current_degree = _current_degree + 5
-                    servo.set_degree(
-                        degree=_current_degree if _current_degree >= 0 else 0
-                    )
-                    count_to_small_corrections = 0
-                else:
-                    count_to_small_corrections = count_to_small_corrections + 1
-
-        else:
-            count_to_small_corrections = 0
-            last_average_temp = _current_average_temp
+            # Turn on relay to use state NO turning off the lights
+            relay.value(1)
 
         lock.release()
-        time.sleep(0.1)
+        time.sleep(1)
 
 
-def run_show_basic_lcd_informations(hygrothermograph, thermistor):
-    DATE_CONTROL = {"INIT_AIR_FLOW": 0, "STOP_SPINNING": 21, "FINAL_DATE": 24}
+def run_input_lcd_light(button, lcd):
+    """
+    Turns the LCD lights on when the button is pressed
+    Args:
+        button (Pin):
+        lcd (LCD):
+    Returns:
+        None
+    """
+    started_light = utime.localtime()
+    lcd.backlight_on()
+
+    while True:
+        if not button.value():
+            started_light = utime.localtime()
+            lcd.backlight_on()
+
+        if started_light is not None:
+            _current_time = utime.localtime()
+            _, _, count_minute = time_diff(started_light, _current_time)
+
+            if count_minute >= 1:
+                started_light = None
+                lcd.backlight_off()
+
+
+def run_show_basic_lcd_informations(hygrothermograph, thermistor, lcd):
+    """
+    Shows the LCD informations
+    Args:
+        hygrothermograph (Hygrothermograph):
+        thermistor (Thermistor):
+        lcd (Lcd):
+    Returns:
+        None
+    """
+    FINAL_DATE = 24
     started_date = utime.localtime()
 
     while True:
@@ -147,7 +150,7 @@ def run_show_basic_lcd_informations(hygrothermograph, thermistor):
             count_day=count_day,
             count_hour=count_hour,
             count_minute=count_minute,
-            day_to_finish=DATE_CONTROL.get("FINAL_DATE") - count_day,
+            day_to_finish=FINAL_DATE - count_day,
         )
 
         lock.release()
@@ -168,25 +171,25 @@ def print_basic_lcd_information(
 
 
 # DEVICES
-# servo to temperature control
-servo = Servo(pin_number=12)
-servo.set_degree(degree=0)
 # step motor to move the eggs
-step_motor = Stepmotor(A=32, B=33, C=25, D=26)
+# step_motor = Stepmotor(A=32, B=33, C=25, D=26)
 # device to get temperature and humidity
 hygrothermograph = Hygrothermograph(data_pin=18)
 # display to show temperatura, humidity and time
 lcd = I2cLcd(scl_pin=14, sda_pin=13)
 # thermistor
 thermistor = Thermistor(pin=36)
-# lcd.backlight_off()
-lcd.backlight_on()
+# relay
+relay = Pin(2, Pin.OUT)
+# lcd button
+button = Pin(15, Pin.IN, Pin.PULL_UP)
 
 
 def main():
-    _thread.start_new_thread(run_config_air_flow, (servo, thermistor))
+    _thread.start_new_thread(run_input_lcd_light, (button, lcd))
+    _thread.start_new_thread(run_config_temperature, (relay, thermistor))
     _thread.start_new_thread(
-        run_show_basic_lcd_informations, (hygrothermograph, thermistor)
+        run_show_basic_lcd_informations, (hygrothermograph, thermistor, lcd)
     )
 
     while True:
