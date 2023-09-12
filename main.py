@@ -1,8 +1,8 @@
 import _thread
 import time
-from machine import Pin
 
 import utime
+from machine import Pin
 
 from esp_libs.hygrothermograph import Hygrothermograph
 from esp_libs.lcd import I2cLcd
@@ -10,19 +10,23 @@ from esp_libs.servo import Servo
 from esp_libs.stepmotor import Stepmotor, StepMotorDirectionOptions
 from esp_libs.thermistor import Thermistor
 
+FINAL_DATE = 24
+START_DATE = utime.localtime()
+
 
 def time_diff(first_date, second_date):
     """
-    get the difference time between first and second data
+    Calculate the time difference between two dates in days, hours, and minutes.
 
     Args:
-        first_date (int): First date int seconds, utime.localtime() is a example of method that return seconds
-        second_date (int): Second date int seconds, utime.localtime() is a example of method that return seconds
+        first_date (int): The first date in seconds.
+        second_date (int): The second date in seconds.
 
     Returns:
-        tuple: diff day, diff hour, diff minute
+        tuple: A tuple containing the difference in days, hours, and minutes.
     """
-    second_date += (1,) + (0,) * (8 - len(second_date))  # ensure a time past midnight
+    # Ensure both dates have a time past midnight
+    second_date += (1,) + (0,) * (8 - len(second_date))
     first_date += (1,) + (0,) * (8 - len(first_date))
 
     _date_1 = utime.mktime(second_date)
@@ -43,19 +47,20 @@ def time_diff(first_date, second_date):
     return diff_day, diff_hour, diff_min
 
 
-def run_config_temperature(relay, thermistor):
+def run_config_temperature(relay, thermistor, temp_min=37, temp_max=38):
     """
-    Turns the lights on or off to control the temperature
-    Works seccond by seccond
+    Control lights to maintain the temperature within a specified range.
+
     Args:
-        relay (Pin):
-        thermistor (Thermistor):
+        relay (Pin): The relay pin for controlling the lights.
+        thermistor (Thermistor): The thermistor for temperature measurement.
+        temp_min (float): The minimum temperature threshold.
+        temp_max (float): The maximum temperature threshold.
+
     Returns:
         None
     """
-    list_last_temperatures = list()
-    TEMP_MIN = 37
-    TEMP_MAX = 38
+    list_last_temperatures = []
 
     while True:
         lock.acquire()
@@ -64,24 +69,63 @@ def run_config_temperature(relay, thermistor):
             temperature = thermistor.get_temperature()
             list_last_temperatures.append(temperature)
 
-            # keep only the last 3 temps
+            # Keep only the last 10 temperatures
             if len(list_last_temperatures) > 10:
                 list_last_temperatures.pop(0)
 
         except:
-            pass
+            # Log if temperature sensor is not found
+            print("Temperature sensor not found")
 
-        _current_average_temp = sum(list_last_temperatures) / len(
-            list_last_temperatures
-        )
+        current_average_temp = sum(list_last_temperatures) / len(list_last_temperatures)
 
-        if _current_average_temp < TEMP_MIN:
-            # Turn off relay to use state NC turning on the lights
+        if current_average_temp < temp_min:
+            # Turn off relay to use NC state, turning on the lights
             relay.value(0)
 
-        elif _current_average_temp > TEMP_MAX:
-            # Turn on relay to use state NO turning off the lights
+        elif current_average_temp > temp_max:
+            # Turn on relay to use NO state, turning off the lights
             relay.value(1)
+
+        lock.release()
+        time.sleep(1)
+
+
+def run_config_extractor_fan(servo, hygrothermograph, min_humidity=60, max_humidity=70):
+    """
+    Control the extractor fan to maintain the humidity within a specified range.
+
+    Args:
+        servo (Servo): The servo for controlling the extractor fan.
+        hygrothermograph (Hygrothermograph): The hygrothermograph for humidity measurement.
+        min_humidity (float): The minimum humidity threshold.
+        max_humidity (float): The maximum humidity threshold.
+
+    Returns:
+        None
+    """
+    while True:
+        lock.acquire()
+
+        try:
+            humidity = hygrothermograph.get_humidity()
+        except:
+            # Log if humidity sensor is not found
+            print("Humidity sensor not found")
+
+        # open the exaustor fan proportionally to the humidity
+        servo_position = int(
+            ((humidity - min_humidity) / (max_humidity - min_humidity)) * (0 - 50) + 50
+        )
+
+        if servo_position < 0:
+            # full open
+            servo_position = 0
+        elif servo_position > 50:
+            # full close
+            servo_position = 50
+
+        servo.set_degree(degree=servo_position)
 
         lock.release()
         time.sleep(1)
@@ -89,10 +133,12 @@ def run_config_temperature(relay, thermistor):
 
 def run_input_lcd_light(button, lcd):
     """
-    Turns the LCD lights on when the button is pressed
+    Turn on the LCD backlight when the button is pressed.
+
     Args:
-        button (Pin):
-        lcd (LCD):
+        button (Pin): The button pin.
+        lcd (LCD): The LCD display.
+
     Returns:
         None
     """
@@ -105,32 +151,59 @@ def run_input_lcd_light(button, lcd):
             lcd.backlight_on()
 
         if started_light is not None:
-            _current_time = utime.localtime()
-            _, _, count_minute = time_diff(started_light, _current_time)
+            current_time = utime.localtime()
+            _, _, count_minute = time_diff(started_light, current_time)
 
             if count_minute >= 1:
                 started_light = None
                 lcd.backlight_off()
 
 
-def run_show_basic_lcd_informations(hygrothermograph, thermistor, lcd):
+def run_move_eggs(step_motor):
     """
-    Shows the LCD informations
+    Move the eggs hourly.
+
     Args:
-        hygrothermograph (Hygrothermograph):
-        thermistor (Thermistor):
-        lcd (Lcd):
+        step_motor (Stepmotor): The step motor.
+
     Returns:
         None
     """
-    FINAL_DATE = 24
-    started_date = utime.localtime()
 
     while True:
         lock.acquire()
 
         current_date = utime.localtime()
-        count_day, count_hour, count_minute = time_diff(started_date, current_date)
+        count_day, *_ = time_diff(START_DATE, current_date)
+
+        if count_day + 3 < FINAL_DATE:
+            step_motor.move_degree(StepMotorDirectionOptions.CLOCKWISE, 180)
+        else:
+            break
+
+        lock.release()
+        time.sleep(3600)
+
+    lock.release()
+
+
+def run_show_basic_lcd_informations(hygrothermograph, thermistor, lcd):
+    """
+    Display basic information on the LCD.
+
+    Args:
+        hygrothermograph (Hygrothermograph): The hygrothermograph for humidity measurement.
+        thermistor (Thermistor): The thermistor for temperature measurement.
+        lcd (Lcd): The LCD display.
+
+    Returns:
+        None
+    """
+    while True:
+        lock.acquire()
+
+        current_date = utime.localtime()
+        count_day, count_hour, count_minute = time_diff(START_DATE, current_date)
 
         try:
             humidity = hygrothermograph.get_humidity()
@@ -142,8 +215,8 @@ def run_show_basic_lcd_informations(hygrothermograph, thermistor, lcd):
         except:
             temperature = -1
 
-        # DISPLAY
-        print_basic_lcd_information(
+        # Display
+        _print_basic_lcd_information(
             lcd=lcd,
             temperature=temperature,
             humidity=humidity,
@@ -157,11 +230,41 @@ def run_show_basic_lcd_informations(hygrothermograph, thermistor, lcd):
         time.sleep(1)
 
 
-def print_basic_lcd_information(
+def _print_basic_lcd_information(
     lcd, temperature, humidity, count_day, count_hour, count_minute, day_to_finish
 ):
+    """
+    Format and show the informations on the LCD.
+
+    Args:
+        lcd (Lcd): The LCD display.
+        temperature (float): The temperature.
+        humidity (float): The humidity.
+        count_day (int): The number of days.
+        count_hour (int): The number of hours.
+        count_minute (int): The number of minutes.
+        day_to_finish (int): The number of days to finish.
+
+    Returns:
+        None
+    """
+
+    if temperature >= 100:
+        temperature_str = "{:.1f}".format(temperature)
+    elif temperature < 100 and temperature >= 10:
+        temperature_str = "{:.2f}".format(temperature)
+    else:
+        temperature_str = "0{:.2f}".format(temperature)
+
+    if humidity >= 100:
+        humidity_str = "{:.1f}".format(humidity)
+    elif humidity < 100 and humidity >= 10:
+        humidity_str = "{:.2f}".format(humidity)
+    else:
+        humidity_str = "0{:.2f}".format(humidity)
+
     lcd.move_to(0, 0)
-    lcd.put_str("T:%.2f  U:%.2f" % (temperature, humidity))
+    lcd.put_str("T:{}  U:{}".format(temperature_str, humidity_str))
 
     lcd.move_to(0, 1)
     lcd.put_str(
@@ -172,25 +275,33 @@ def print_basic_lcd_information(
 
 # DEVICES
 # step motor to move the eggs
-# step_motor = Stepmotor(A=32, B=33, C=25, D=26)
+egg_movement_step_motor = Stepmotor(A=33, B=25, C=26, D=27)
+# servo to open and close the extractor fan
+extractor_fan_servo = Servo(pin_number=12, max_degree=180, freq=50, init_duty=0)
+extractor_fan_servo.set_degree(degree=0)
 # device to get temperature and humidity
-hygrothermograph = Hygrothermograph(data_pin=18)
+hygrothermograph_device = Hygrothermograph(data_pin=18)
 # display to show temperatura, humidity and time
-lcd = I2cLcd(scl_pin=14, sda_pin=13)
+lcd_device = I2cLcd(scl_pin=14, sda_pin=13)
 # thermistor
-thermistor = Thermistor(pin=36)
-# relay
-relay = Pin(2, Pin.OUT)
+thermistor_device = Thermistor(pin=36)
+# relay to control the lights
+lamp_relay = Pin(2, Pin.OUT)
 # lcd button
-button = Pin(15, Pin.IN, Pin.PULL_UP)
+lcd_light_button = Pin(15, Pin.IN, Pin.PULL_UP)
 
 
 def main():
-    _thread.start_new_thread(run_input_lcd_light, (button, lcd))
-    _thread.start_new_thread(run_config_temperature, (relay, thermistor))
+    _thread.start_new_thread(run_input_lcd_light, (lcd_light_button, lcd_device))
+    _thread.start_new_thread(run_config_temperature, (lamp_relay, thermistor_device))
     _thread.start_new_thread(
-        run_show_basic_lcd_informations, (hygrothermograph, thermistor, lcd)
+        run_config_extractor_fan, (extractor_fan_servo, hygrothermograph_device)
     )
+    _thread.start_new_thread(
+        run_show_basic_lcd_informations,
+        (hygrothermograph_device, thermistor_device, lcd_device),
+    )
+    _thread.start_new_thread(run_move_eggs, (egg_movement_step_motor,))
 
     while True:
         pass
