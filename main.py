@@ -25,7 +25,7 @@ final_date = 24
 egg_movement_step_motor = Stepmotor(A=33, B=25, C=26, D=27)
 # servo to open and close the extractor fan
 extractor_fan_servo = Servo(pin_number=12, max_degree=180, freq=50, init_duty=0)
-extractor_fan_servo.set_degree(degree=20)
+extractor_fan_servo.set_degree(degree=25)
 # device to get temperature and humidity
 hygrothermograph_device = Hygrothermograph(data_pin=18)
 # display to show temperatura, humidity and time
@@ -43,32 +43,24 @@ def time_diff(first_date, second_date):
     Calculate the time difference between two dates in days, hours, and minutes.
 
     Args:
-        first_date (int): The first date in seconds.
-        second_date (int): The second date in seconds.
+        first_date (tuple): The first date in seconds.
+        second_date (tuple): The second date in seconds.
 
     Returns:
         tuple: A tuple containing the difference in days, hours, and minutes.
     """
-    # Ensure both dates have a time past midnight
-    second_date += (1,) + (0,) * (8 - len(second_date))
-    first_date += (1,) + (0,) * (8 - len(first_date))
+    first_timestamp = utime.mktime(first_date) 
+    second_timestamp = utime.mktime(second_date)
 
-    _date_1 = utime.mktime(second_date)
-    _date_2 = utime.mktime(first_date)
+    # calculate the difference in seconds
+    diff_seconds = abs(first_timestamp - second_timestamp)
 
-    _day_1 = _date_1 // (24 * 3600)
-    _day_2 = _date_2 // (24 * 3600)
-    diff_day = _day_1 - _day_2
+    # convert to days, hours, minutes
+    days = diff_seconds // (24 * 3600)
+    hours = (diff_seconds % (24 * 3600)) // 3600
+    minutes = (diff_seconds % 3600) // 60
 
-    _hour_1 = (_date_1 - _day_1 * (24 * 3600)) // 3600
-    _hour_2 = (_date_2 - _day_2 * (24 * 3600)) // 3600
-    diff_hour = _hour_1 - _hour_2
-
-    _min_1 = (_date_1 - (_day_1 * (24 * 3600) + _hour_1 * 3600)) // 60
-    _min_2 = (_date_2 - (_day_2 * (24 * 3600) + _hour_2 * 3600)) // 60
-    diff_min = _min_1 - _min_2
-
-    return diff_day, diff_hour, diff_min
+    return days, hours, minutes
 
 
 def get_temperature(thermistor):
@@ -218,22 +210,26 @@ def run_input_lcd_light(button, lcd):
     Returns:
         None
     """
+    global current_date
+
     started_light = utime.localtime()
     lcd.backlight_on()
 
     while True:
+        lock.acquire()
+
         if not button.value():
             started_light = utime.localtime()
             lcd.backlight_on()
 
         if started_light is not None:
-            current_time = utime.localtime()
-            _, _, count_minute = time_diff(started_light, current_time)
+            _, _, count_minute = time_diff(started_light, current_date)
 
             if count_minute >= 1:
                 started_light = None
                 lcd.backlight_off()
 
+        lock.release()
 
 def run_move_eggs(step_motor):
     """
@@ -273,7 +269,7 @@ def run_show_basic_lcd_informations(lcd):
     Returns:
         None
     """
-    global current_date, last_10_temperatures, humidity, temperature, final_date
+    global current_date, last_10_temperatures, humidity, temperature, final_date, START_DATE
 
     while True:
         lock.acquire()
@@ -335,7 +331,7 @@ def main():
     _thread.start_new_thread(
         run_config_extractor_fan, (extractor_fan_servo, hygrothermograph_device)
     )
-    _thread.start_new_thread(run_input_lcd_light, (lcd_light_button, lcd_device))
+    # _thread.start_new_thread(run_input_lcd_light, (lcd_light_button, lcd_device))
     _thread.start_new_thread(run_move_eggs, (egg_movement_step_motor,))
     _thread.start_new_thread(
         run_show_basic_lcd_informations,
